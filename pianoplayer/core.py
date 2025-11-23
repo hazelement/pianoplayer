@@ -2,9 +2,9 @@ import csv
 import json
 import os, sys
 import platform
+import xml.etree.ElementTree as ET
 
-from music21 import converter, stream
-from music21.articulations import Fingering
+from music21 import converter
 
 from pianoplayer.hand import Hand
 from pianoplayer.scorereader import reader, PIG2Stream, reader_pretty_midi, reader_PIG
@@ -73,28 +73,111 @@ def run_annotate(filename,
     annotate(args)
 
 
-def annotate_fingers_xml(sf, hand, args, is_right=True):
-    p0 = sf.parts[args.rbeam if is_right else args.lbeam]
-    idx = 0
-    for el in p0.flat.getElementsByClass("GeneralNote"):
-        if el.isNote:
-            n = hand.noteseq[idx]
-            if hand.lyrics:
-                el.addLyric(n.fingering)
-            else:
-                el.articulations.append(Fingering(n.fingering))
-            idx += 1
-        elif el.isChord:
-            for j, cn in enumerate(el.pitches):
-                n = hand.noteseq[idx]
-                if hand.lyrics:
-                    nl = len(cn.chord21.pitches) - cn.chordnr
-                    el.addLyric(cn.fingering, nl)
-                else:
-                    el.articulations.append(Fingering(n.fingering))
-                idx += 1
-
-    return sf
+def annotate_fingers_xml_direct(tree, hand, staff_number, lyrics=False):
+    """Annotate fingerings directly in MusicXML file using XML manipulation.
+    This avoids music21's round-trip issues with complex tuplets.
+    Only annotates key fingering positions (finger changes, stretches, thumb crossings).
+    
+    Args:
+        tree: ElementTree object (parsed XML)
+        hand: Hand object with noteseq containing fingering information
+        staff_number: 1 for right hand (staff 1), 2 for left hand (staff 2), etc.
+                     If 0, annotate all notes regardless of staff
+        lyrics: If True, add as lyrics instead of technical fingering
+    """
+    root = tree.getroot()
+    
+    note_idx = 0
+    prev_fingering = None
+    prev_pitch = None
+    measure_start = True
+    
+    # Iterate through all parts and measures
+    for part in root.findall('.//part'):
+        for measure in part.findall('.//measure'):
+            measure_start = True  # Mark start of each measure
+            
+            for note_elem in measure.findall('.//note'):
+                # Check staff number if specified
+                if staff_number > 0:
+                    staff_elem = note_elem.find('./staff')
+                    if staff_elem is not None:
+                        if int(staff_elem.text) != staff_number:
+                            continue
+                
+                # Skip if this is a chord note (not the first note of chord)
+                if note_elem.find('./chord') is not None:
+                    continue
+                
+                # Skip rests
+                if note_elem.find('./rest') is not None:
+                    continue
+                
+                # Get fingering from hand
+                if note_idx >= len(hand.noteseq):
+                    break
+                
+                note_data = hand.noteseq[note_idx]
+                fingering = note_data.fingering
+                current_pitch = note_data.pitch
+                note_idx += 1
+                
+                # Decide whether to show this fingering - only show key positions
+                show_fingering = False
+                
+                # Show first note in each measure for orientation
+                if measure_start:
+                    show_fingering = True
+                    measure_start = False
+                # Show thumb (1) transitions - indicates position shift or crossing
+                elif fingering == 1 and prev_fingering is not None and prev_fingering > 1:
+                    show_fingering = True
+                # Show pinky (5) transitions - indicates stretch or position
+                elif fingering == 5 and prev_fingering is not None and prev_fingering < 5:
+                    show_fingering = True
+                # Show large interval jumps (more than octave = 12 semitones)
+                elif prev_pitch is not None and abs(current_pitch - prev_pitch) > 12:
+                    show_fingering = True
+                # Show direction changes with finger changes (e.g., 3->2 when going up)
+                elif prev_fingering is not None and prev_pitch is not None:
+                    pitch_direction = current_pitch - prev_pitch
+                    finger_direction = fingering - prev_fingering
+                    # If pitch goes up but fingers go down (or vice versa), it's likely a thumb cross
+                    if pitch_direction > 0 and finger_direction < -2:
+                        show_fingering = True
+                    elif pitch_direction < 0 and finger_direction > 2:
+                        show_fingering = True
+                
+                if show_fingering:
+                    fingering_str = str(fingering)
+                    
+                    if lyrics:
+                        # Add as lyric
+                        lyric = note_elem.find('./lyric')
+                        if lyric is None:
+                            lyric = ET.SubElement(note_elem, 'lyric')
+                            lyric.set('number', '1')
+                        text_elem = lyric.find('./text')
+                        if text_elem is None:
+                            text_elem = ET.SubElement(lyric, 'text')
+                        text_elem.text = fingering_str
+                    else:
+                        # Add as technical fingering
+                        notations = note_elem.find('./notations')
+                        if notations is None:
+                            notations = ET.SubElement(note_elem, 'notations')
+                        
+                        technical = notations.find('./technical')
+                        if technical is None:
+                            technical = ET.SubElement(notations, 'technical')
+                        
+                        fingering_elem = ET.SubElement(technical, 'fingering')
+                        fingering_elem.text = fingering_str
+                
+                prev_fingering = fingering
+                prev_pitch = current_pitch
+    
+    return tree
 
 
 def annotate_PIG(hand, is_right=True):
@@ -145,21 +228,29 @@ def annotate(args):
         if not args.right_only:
             lh_noteseq = reader_PIG(args.filename, args.lbeam)
 
-    elif '.mid' in args.filename or '.midi' in args.filename:
-        pm = pretty_midi.PrettyMIDI(args.filename)
-        if not args.left_only:
-            pm_right = pm.instruments[args.rbeam]
-            rh_noteseq = reader_pretty_midi(pm_right, beam=args.rbeam)
-        if not args.right_only:
-            pm_left = pm.instruments[args.lbeam]
-            lh_noteseq = reader_pretty_midi(pm_left, beam=args.lbeam)
-
-    else:
+    elif '.mid' in args.filename or '.midi' in args.filename or '.xml' in args.filename or '.musicxml' in args.filename:
+        # For MIDI files, convert to MusicXML using MuseScore first
+        if '.mid' in args.filename or '.midi' in args.filename:
+            xmlfn = args.filename.replace('.mid', '.musicxml').replace('.midi', '.musicxml')
+            if not os.path.exists(xmlfn):
+                print(f'Converting MIDI to MusicXML: {xmlfn}')
+                os.system(f'mscore -o "{xmlfn}" "{args.filename}" -platform offscreen 2>/dev/null')
+        else:
+            # MusicXML file provided directly
+            xmlfn = args.filename
+        
+        # Parse the MusicXML for fingering generation
         sc = converter.parse(xmlfn)
+        
         if not args.left_only:
             rh_noteseq = reader(sc, beam=args.rbeam)
         if not args.right_only:
             lh_noteseq = reader(sc, beam=args.lbeam)
+
+    else:
+        print(f'Unsupported file format: {args.filename}')
+        print('Supported formats: .mid, .midi, .xml, .musicxml, .mscz, .mscx, .txt')
+        sys.exit(1)
 
     if not args.left_only:
         rh = Hand(side="right", noteseq=rh_noteseq, size=hand_size)
@@ -204,27 +295,21 @@ def annotate(args):
                     tsv_writer.writerow([idx, onset_time, offset_time, spelled_pitch, onset_velocity, offset_velocity,
                                          channel, finger_number, cost, id_n])
         else:
-            ext = os.path.splitext(args.filename)[1]
-            if ext in ['mid', 'midi']:
-                sf = converter.parse(xmlfn)
-            elif ext in ['txt']:
-                sf = stream.Stream()
-                if not args.left_only:
-                    ptr = PIG2Stream(args.filename, 0)
-                    sf.insert(0, ptr)
-                if not args.right_only:
-                    ptl = PIG2Stream(args.filename, 1)
-                    sf.insert(0, ptl)  # 0=offset
-            else:
-                sf = converter.parse(xmlfn)
-
-            # Annotate fingers in XML
+            # For MusicXML output, use direct XML manipulation to avoid music21 round-trip issues
+            # music21 cannot handle complex tuplets and creates "2048th note" errors
+            # Annotate directly in XML file
+            # For piano scores, staff 1 is right hand (treble), staff 2 is left hand (bass)
+            # args.rbeam and args.lbeam are 0 and 1, so we add 1 to get staff numbers
+            tree = ET.parse(xmlfn)
+            
             if not args.left_only:
-                sf = annotate_fingers_xml(sf, rh, args, is_right=True)
-
+                tree = annotate_fingers_xml_direct(tree, rh, args.rbeam + 1, args.below_beam)
+            
             if not args.right_only:
-                sf = annotate_fingers_xml(sf, lh, args, is_right=False)
-            sf.write('musicxml', fp=args.outputfile)
+                tree = annotate_fingers_xml_direct(tree, lh, args.lbeam + 1, args.below_beam)
+            
+            # Write output
+            tree.write(args.outputfile, encoding='utf-8', xml_declaration=True)
 
             if args.musescore:  # -m option
                 print('Opening musescore with output score:', args.outputfile)
@@ -258,4 +343,34 @@ def annotate(args):
 
 
 if __name__ == '__main__':
-    run_annotate('../scores/test_chord.xml', outputfile="test_chord_annotate.xml", right_only=True, musescore=True, n_measures=800, depth=0)
+    import argparse
+
+    pr = argparse.ArgumentParser(description="""PianoPlayer,
+    check out home page https://github.com/marcomusy/pianoplayer""")
+    pr.add_argument("filename", type=str, help="Input music xml/midi file name")
+    pr.add_argument("-o", "--outputfile", metavar='output.xml', type=str, help="Annotated output xml file name",
+                    default='output.xml')
+    pr.add_argument("-n", "--n-measures", metavar='', type=int, help="[100] Number of score measures to scan",
+                    default=100)
+    pr.add_argument("-s", "--start-measure", metavar='', type=int, help="Start from measure number [1]", default=1)
+    pr.add_argument("-d", "--depth", metavar='', type=int, help="[auto] Depth of combinatorial search, [4-9]",
+                    default=0)
+    pr.add_argument("-rbeam", metavar='', type=int, help="[0] Specify Right Hand beam number", default=0)
+    pr.add_argument("-lbeam", metavar='', type=int, help="[1] Specify Left Hand beam number", default=1)
+    pr.add_argument("--quiet", help="Switch off verbosity", action="store_true")
+    pr.add_argument("-m", "--musescore", help="Open output in musescore after processing", action="store_true")
+    pr.add_argument("-b", "--below-beam", help="Show fingering numbers below beam line", action="store_true")
+    pr.add_argument("-v", "--with-vedo", help="Play 3D scene after processing", action="store_true")
+    pr.add_argument("--vedo-speed", metavar='', type=float, help="[1] Speed factor of rendering", default=1.5)
+    pr.add_argument("-z", "--sound-off", help="Disable sound", action="store_true")
+    pr.add_argument("-l", "--left-only", help="Fingering for left hand only", action="store_true")
+    pr.add_argument("-r", "--right-only", help="Fingering for right hand only", action="store_true")
+    pr.add_argument("-XXS", "--hand-size-XXS", help="Set hand size to XXS", action="store_true")
+    pr.add_argument("-XS", "--hand-size-XS", help="Set hand size to XS", action="store_true")
+    pr.add_argument("-S", "--hand-size-S", help="Set hand size to S", action="store_true")
+    pr.add_argument("-M", "--hand-size-M", help="Set hand size to M", action="store_true")
+    pr.add_argument("-L", "--hand-size-L", help="Set hand size to L", action="store_true")
+    pr.add_argument("-XL", "--hand-size-XL", help="Set hand size to XL", action="store_true")
+    pr.add_argument("-XXL", "--hand-size-XXL", help="Set hand size to XXL", action="store_true")
+    args = pr.parse_args()
+    annotate(args)

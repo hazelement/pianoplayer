@@ -1,0 +1,33 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
+{
+    "name": "Existing Dockerfile",
+    "build": {
+        // Sets the run context to one level up instead of the .devcontainer folder.
+        "context": "..",
+        // Update the 'dockerFile' property if you aren't using the standard 'Dockerfile' filename.
+        "dockerfile": "../Dockerfile"
+    },
+    "containerEnv": {
+        "PYTHONPATH": "${containerWorkspaceFolder}",
+    },
+    "mounts": [
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/root/.ssh,readonly,type=bind",
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.zshrc,target=/root/.zshrc,readonly,type=bind",
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.setup,target=/root/.setup,readonly,type=bind",
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.oh-my-zsh,target=/root/.oh-my-zsh,readonly,type=bind"
+    ],
+    // Features to add to the dev container. More info: https://containers.dev/features.
+    "features": {
+        "ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {},
+        "ghcr.io/guiyomh/features/vim": {}
+    },
+    // Use 'forwardPorts' to make a list of ports inside the container available locally.
+    // "forwardPorts": [],
+    // Uncomment the next line to run commands after the container is created.
+    // "postCreateCommand": "cat /etc/os-release",
+    // Configure tool-specific properties.
+    // "customizations": {},
+    // Uncomment to connect as an existing user other than the container default. More info: https://aka.ms/dev-containers-non-root.
+    // "remoteUser": "devcontainer"
+}

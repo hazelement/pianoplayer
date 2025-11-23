@@ -1,0 +1,34 @@
+Metadata-Version: 2.4
+Name: pianoplayer
+Version: 2.2.0
+Summary: Automatic piano fingering generator. Finds and shows in 3D the best fingering combination to play a score.
+Home-page: https://github.com/marcomusy/pianoplayer
+Author: Marco Musy
+Author-email: marco.musy@gmail.com
+License: MIT
+Keywords: piano fingering
+Classifier: Intended Audience :: Science/Research
+Classifier: Intended Audience :: Education
+Classifier: Programming Language :: Python
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Topic :: Scientific/Engineering :: Visualization
+Classifier: Topic :: Scientific/Engineering :: Information Analysis
+License-File: LICENSE
+Requires-Dist: music21
+Requires-Dist: vedo
+Requires-Dist: pretty_midi
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: summary
+
+Automatic piano fingering generator.
+    Finds and shows in a 3D visualization the best fingering combination to play a score.
+
+    Check out https://github.com/marcomusy/pianoplayer for documentation.
