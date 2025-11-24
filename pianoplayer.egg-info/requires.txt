@@ -1,3 +1,0 @@
-music21
-vedo
-pretty_midi

@@ -1,60 +1,90 @@
 # PianoPlayer
 
-[![Codacy Badge](https://api.codacy.com/project/badge/Grade/fb513fa9c1a34f9988ec5dc443cbe633)](https://app.codacy.com/app/marcomusy/pianoplayer?utm_source=github.com&utm_medium=referral&utm_content=marcomusy/pianoplayer&utm_campaign=Badge_Grade_Settings)
-[![Downloads](https://pepy.tech/badge/pianoplayer)](https://pepy.tech/project/pianoplayer)
-[![lics](https://img.shields.io/badge/license-MIT-blue.svg)](https://en.wikipedia.org/wiki/MIT_License)
-[![DOI](https://zenodo.org/badge/107160052.svg)](https://zenodo.org/badge/latestdoi/107160052)
+Automatic piano fingering generator web application. Upload MIDI or MusicXML files and download them with optimal piano fingering annotations.
 
+## Features
 
-Automatic piano fingering generator. <br />
-Find the optimal fingering combination to play a piano score.
-Optionally visualize it in 3D with [vedo](https://github.com/marcomusy/vedo).<br />
+- 🎹 Upload MIDI (.mid, .midi) or MusicXML (.xml, .musicxml, .mscz, .mscx) files
+- ✋ Select hand size (XXS to XXL, default: Medium)
+- 🎼 Automatic fingering annotation for both hands
+- ⬇️ Download annotated MusicXML files
+- 🎨 Modern, responsive web interface with drag-and-drop
+- 📝 Automatic work title and movement title in output
 
-## Download and Install:
+## Installation
+
+1. Clone the repository:
 ```bash
-pip install pianoplayer
-```
-to enable sound you may need to:
-```bash
-sudo apt install libasound2-dev
-pip install simpleaudio
-```
-
-#### Installing without 3D rendering
-To only install the core functionality and skip everything else, use the following:
-```bash
-pip install music21
-pip install --no-deps pianoplayer
+git clone https://github.com/hazelement/pianoplayer.git
+cd pianoplayer
 ```
 
-To visualize the output annotated score install the latest
-[musescore](https://musescore.org/en/download), or any other renderer
-of [MusicXML](https://en.wikipedia.org/wiki/MusicXML)
-files.
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-**Windows 10** users can place this file:
-[pianoplayer.bat](https://github.com/marcomusy/pianoplayer/blob/master/pianoplayer.bat)
-on their desktop (edit the path to your local anaconda or python installation).
-Check out [this link](https://github.com/marcomusy/pianoplayer/issues/27) in case of
-installation problems.
+3. Ensure MuseScore is installed (for MIDI to MusicXML conversion):
+```bash
+# Ubuntu/Debian
+sudo apt install musescore
 
+# macOS
+brew install musescore
 
-## CLI Usage:
-Example command line from terminal:<br />
-`pianoplayer scores/bach_invention4.xml --verbose -n10 -rvzm`<br />
-will find the right hand fingering for the first 10 measures,
-pop up a 3D rendering window and invoke *musescore*.
+# Windows - download from https://musescore.org
+```
 
-The output is saved as a [MusicXML](https://en.wikipedia.org/wiki/MusicXML)
-file with name `output.xml`.<br />
+## Running the Web Application
+
+Start the Flask server:
+```bash
+python app.py
+```
+
+The application will be available at `http://localhost:5000`
+
+## Usage
+
+1. Open your browser and go to `http://localhost:5000`
+2. Upload a MIDI or MusicXML file (drag-and-drop or click to browse)
+3. Select your hand size (default is Medium)
+4. Click "Process File"
+5. Wait for processing to complete
+6. Click "Download Annotated File" to get your fingered score
+
+## Hand Size Options
+
+- **XXS** - Extra Extra Small (child hands)
+- **XS** - Extra Small
+- **S** - Small
+- **M** - Medium (default, average adult)
+- **L** - Large
+- **XL** - Extra Large
+- **XXL** - Extra Extra Large (very large hands)
+
+## API Usage
+
+You can also use the fingering annotation programmatically:
+
+```python
+from pianoplayer.core import annotate_with_args
+
+annotate_with_args(
+    filename='input.mid',
+    outputfile='output.xml',
+    hand_size_M=True  # Medium hand size
+)
+```
+
+## Command Line Usage (Legacy)
+
+You can still use the command line interface:
 
 ```bash
-pianoplayer         # if no argument is given a GUI will pop up (on windows try `python pianoplayer.py`)
-# Or
-pianoplayer [-h] [-o] [-n] [-s] [-d] [-k] [-rbeam] [-lbeam] [-q] [-m] [-v] [--vedo-speed]
-            [-z] [-l] [-r] [-XXS] [-XS] [-S] [-M] [-L] [-XL] [-XXL]
-            filename
-# Valid file formats: MusicXML, musescore, midi (.xml, .mscz, .mscx, .mid)
+python -m pianoplayer.core input.mid -o output.xml
+# Or with options:
+python -m pianoplayer.core input.mid -o output.xml -M --quiet
 #
 # Optional arguments:
 #   -h, --help            show this help message and exit
@@ -80,29 +110,26 @@ pianoplayer [-h] [-o] [-n] [-s] [-d] [-k] [-rbeam] [-lbeam] [-q] [-m] [-v] [--ve
 #   -XXL, --hand-size-XXL Set hand size to XXL
 ```
 
-### GUI Usage:<br />
-Just type `pianoplayer` in a terminal
-(or double click the
-[pianoplayer.bat](https://github.com/marcomusy/pianoplayer/blob/master/pianoplayer.bat) file),
-then:
+## Production Deployment
 
-![newgui](https://user-images.githubusercontent.com/32848391/63605343-09365000-c5ce-11e9-97b8-a5642e71ca24.png)
+For production use, use a WSGI server like Gunicorn:
 
-- press **Import Score** (valid formats: *musescore, MusicXML, MIDI, [PIG](http://beam.kisarazu.ac.jp/~saito/research/PianoFingeringDataset/)*)
-- press **GENERATE** (`output.xml` is written)
-- press **Musescore** to visualize the annotated score
-- press **3D Player** to show the animation (Press `Esc` to quit the application)
+```bash
+pip install gunicorn
+gunicorn -w 4 -b 0.0.0.0:5000 app:app
+```
 
+## File Size Limits
 
-#### Example output, as displayed in *musescore*:
+- Maximum upload size: 16 MB
+- Supported formats: `.mid`, `.midi`, `.xml`, `.musicxml`, `.mscz`, `.mscx`
 
-(If fingering numbers are not visible enough try `-b` option.)
+## Security Features
 
-
-![bachinv4](https://user-images.githubusercontent.com/32848391/63605352-10f5f480-c5ce-11e9-8b00-34f1adc2e79b.png)
-
-
-![pianoplayer3d](https://user-images.githubusercontent.com/32848391/63605322-0176ab80-c5ce-11e9-8213-b572d0303523.gif)
+- Files are automatically deleted after download
+- Temporary files are stored securely
+- File uploads are sanitized
+- File type validation enforced
 
 
 ## How the algorithm works:
