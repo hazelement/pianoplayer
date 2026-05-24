@@ -1,0 +1,24 @@
+{
+  "features": {
+    "ghcr.io/devcontainers-extra/features/tmux-apt-get:1": {
+      "version": "1.0.17",
+      "resolved": "ghcr.io/devcontainers-extra/features/tmux-apt-get@sha256:7d15e519840976e86642bba9180e11cba88dd07a00209c7f589d6112d9876c89",
+      "integrity": "sha256:7d15e519840976e86642bba9180e11cba88dd07a00209c7f589d6112d9876c89"
+    },
+    "ghcr.io/devcontainers/features/common-utils:2.5.7": {
+      "version": "2.5.7",
+      "resolved": "ghcr.io/devcontainers/features/common-utils@sha256:dbf431d6b42d55cde50fa1df75c7f7c3999a90cde6d73f7a7071174b3c3d0cc4",
+      "integrity": "sha256:dbf431d6b42d55cde50fa1df75c7f7c3999a90cde6d73f7a7071174b3c3d0cc4"
+    },
+    "ghcr.io/guiyomh/features/vim": {
+      "version": "0.0.1",
+      "resolved": "ghcr.io/guiyomh/features/vim@sha256:53c64a458fe88f40862ad5f94ea3f8d7fdf46c3fb42bdaa8a6a09f7d44f182f7",
+      "integrity": "sha256:53c64a458fe88f40862ad5f94ea3f8d7fdf46c3fb42bdaa8a6a09f7d44f182f7"
+    },
+    "ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {
+      "version": "0.0.8",
+      "resolved": "ghcr.io/nils-geistmann/devcontainers-features/zsh@sha256:fd57a61a5187480b5e73f8041be5b67005be48f06503736df6cfdd8d0f38f3c4",
+      "integrity": "sha256:fd57a61a5187480b5e73f8041be5b67005be48f06503736df6cfdd8d0f38f3c4"
+    }
+  }
+}

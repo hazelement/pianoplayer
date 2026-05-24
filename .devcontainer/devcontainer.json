@@ -11,16 +11,357 @@
     "containerEnv": {
         "PYTHONPATH": "${containerWorkspaceFolder}",
     },
+    "postCreateCommand": "bash .devcontainer/setup.sh",
     "mounts": [
-        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/root/.ssh,readonly,type=bind",
-        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.zshrc,target=/root/.zshrc,readonly,type=bind",
-        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.setup,target=/root/.setup,readonly,type=bind",
-        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.oh-my-zsh,target=/root/.oh-my-zsh,readonly,type=bind"
     ],
     // Features to add to the dev container. More info: https://containers.dev/features.
     "features": {
+        "ghcr.io/guiyomh/features/vim": {},
         "ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {},
-        "ghcr.io/guiyomh/features/vim": {}
+        "ghcr.io/devcontainers/features/common-utils:2.5.7": {
+            "configureZshAsDefault": true,
+            "installOhMyZsh": true
+        },
+        "ghcr.io/devcontainers-extra/features/tmux-apt-get:1": {}
+    },
+    // Configure tool-specific properties.
+    "customizations": {
+        // Configure properties specific to VS Code.
+        "vscode": {
+            // Set *default* container specific settings.json values on container create.
+            "settings": {
+                "javascript.updateImportsOnFileMove.enabled": "always",
+                "explorer.confirmDelete": false,
+                "editor.formatOnType": true,
+                "explorer.confirmDragAndDrop": false,
+                "explorer.openEditors.visible": 0,
+                "editor.suggestSelection": "first",
+                "files.autoSave": "afterDelay",
+                "files.exclude": {
+                    "__pycache__": true,
+                    ".idea": true,
+                    ".vscode": true,
+                    "*.pyc": true,
+                    "**/__pycache__": true,
+                    "**/._*": true,
+                    "**/.classpath": true,
+                    "**/.factorypath": true,
+                    "**/.project": true,
+                    "**/.settings": true,
+                    "**/venv": true
+                },
+                "telemetry.enableTelemetry": false,
+                "workbench.enableExperiments": false,
+                "editor.tokenColorCustomizations": {
+                    "textMateRules": [
+                        {
+                            "scope": [
+                                "variable.parameter.function-call",
+                            ],
+                            "settings": {
+                                "foreground": "#a64724",
+                            },
+                        },
+                        {
+                            "scope": "meta.paragraph.markdown", // regular text
+                            "settings": {
+                                "foreground": "#b8b8b8"
+                            }
+                        },
+                        {
+                            "scope": [
+                                "markup.heading.markdown", // All headings and their text
+                                "markup.list", //Just the hypens, not the text
+                                "markup.fenced_code.block.markdown", // code blocks and everything between them
+                                "markup.underline",
+                                "markup.bold",
+                                "markup.italic",
+                                "meta.separator.markdown",
+                            ],
+                            "settings": {
+                                "foreground": "#ce9178",
+                            }
+                        },
+                        {
+                            "scope": [
+                                "markup.heading.markdown", // All headings and their textbetween them
+                                "markup.underline",
+                                "markup.bold",
+                                "markup.italic",
+                            ],
+                            "settings": {
+                                "fontStyle": "bold"
+                            }
+                        },
+                        {
+                            "scope": [
+                                "markup.italic",
+                            ],
+                            "settings": {
+                                "fontStyle": "italic"
+                            }
+                        },
+                    ],
+                },
+                "workbench.colorCustomizations": {
+                    "panelTitle.activeBorder": "#4a88c7",
+                    "terminal.background": "#2b2b2b",
+                    "panel.background": "#2d3641",
+                    "focusBorder": "#85858500",
+                    "sash.hoverBorder": "#858585",
+                    "input.background": "#45494a",
+                    "input.border": "#ff000000",
+                    "titleBar.border": "#515151",
+                    "list.focusOutline": "#ffffff00",
+                    "list.inactiveSelectionBackground": "#0d293e",
+                    "activityBar.activeBorder": "#4a88c7",
+                    "activityBar.background": "#3c3f41",
+                    "activityBar.border": "#323232",
+                    "tree.indentGuidesStroke": "#ff000000",
+                    "button.background": "#7e7e7e",
+                    "sideBar.background": "#3c3f41",
+                    "sideBar.border": "#313335",
+                    "sideBarSectionHeader.background": "#3b4754",
+                    "sideBarSectionHeader.border": "#323232",
+                    "list.hoverBackground": "#41a6d900",
+                    "list.activeSelectionBackground": "#45494a",
+                    "list.warningForeground": "#bf9210",
+                    "statusBar.background": "#3c3f41",
+                    "statusBarItem.hoverBackground": "#353739",
+                    "statusBar.foreground": "#afb1b3",
+                    "statusBar.border": "#858585",
+                    "editor.background": "#2b2b2b",
+                    "editor.lineHighlightBackground": "#444444",
+                    "editorGutter.background": "#313335",
+                    "editorHoverWidget.background": "#46484a",
+                    "editorHoverWidget.border": "#565656",
+                    "editorWarning.foreground": "#bf921088",
+                    "editorInfo.foreground": "#7ac2767c",
+                    "editorSuggestWidget.background": "#46484a",
+                    "editorSuggestWidget.border": "#565656",
+                    "editorSuggestWidget.selectedForeground": "#b6b7b9",
+                    "editorSuggestWidget.focusHighlightForeground": "#4e90ee",
+                    "editorSuggestWidget.highlightForeground": "#4e90ee",
+                    "editorSuggestWidget.selectedBackground": "#515457",
+                    "editorHoverWidget.foreground": "#b6b7b9",
+                    "editorHoverWidget.highlightForeground": "#e8e8e8",
+                    "minimap.selectionHighlight": "#b1b1b1",
+                    "tab.activeBackground": "#4e5254",
+                    "tab.inactiveBackground": "#3c3f41",
+                    "tab.activeForeground": "#afb1b3",
+                    "tab.inactiveForeground": "#afb1b3",
+                    "tab.unfocusedActiveForeground": "#afb1b3",
+                    "tab.unfocusedInactiveForeground": "#afb1b3",
+                    "tab.unfocusedInactiveBackground": "#3c3f41",
+                    "tab.activeBorder": "#4a88c7",
+                    "tab.border": "#ff000000",
+                    "editorUnnecessaryCode.opacity": "#0000007e",
+                },
+                "workbench.tree.indent": 20,
+                "sync.quietSync": true,
+                "sync.autoDownload": true,
+                "sync.autoUpload": true,
+                // Custom tags for the parser to use
+                "yaml.customTags": [
+                    "!And",
+                    "!And sequence",
+                    "!If",
+                    "!If sequence",
+                    "!Not",
+                    "!Not sequence",
+                    "!Equals",
+                    "!Equals sequence",
+                    "!Or",
+                    "!Or sequence",
+                    "!FindInMap",
+                    "!FindInMap sequence",
+                    "!Base64",
+                    "!Join",
+                    "!Join sequence",
+                    "!Cidr",
+                    "!Ref",
+                    "!Sub",
+                    "!Sub sequence",
+                    "!GetAtt",
+                    "!GetAZs",
+                    "!ImportValue",
+                    "!ImportValue sequence",
+                    "!Select",
+                    "!Select sequence",
+                    "!Split",
+                    "!Split sequence"
+                ],
+                // Enable/disable default YAML formatter (requires restart)
+                "yaml.format.enable": true,
+                "yaml.validate": false,
+                "terminal.integrated.cwd": "${fileDirname}",
+                "editor.wordWrap": "on",
+                "plantuml.exportFormat": "png",
+                "python.venvFolders": [
+                    "~/.virtualenvs",
+                    "~/.virtualenv"
+                ],
+                "python.autoComplete.addBrackets": true,
+                "[markdown]": {
+                    "editor.formatOnSave": true,
+                    "editor.formatOnPaste": true,
+                    "editor.defaultFormatter": "DavidAnson.vscode-markdownlint"
+                },
+                "workbench.preferredHighContrastColorTheme": "Default Dark+",
+                "editor.fontFamily": "Jetbrains Mono, Monaco, Menlo, Consolas, \"Droid Sans Mono\", 'Courier New', monospace",
+                "csharp.suppressDotnetInstallWarning": true,
+                "editor.quickSuggestionsDelay": 0,
+                "prettier.tabWidth": 4,
+                "python.jediEnabled": false,
+                "python.sortImports.args": [
+                    "-rc",
+                    "--atomic"
+                ],
+                "editor.definitionLinkOpensInPeek": true,
+                "gitlens.advanced.telemetry.enabled": false,
+                "telemetry.enableCrashReporter": false,
+                "problems.decorations.enabled": false,
+                "editor.codeActionsOnSave": {
+                    "source.unusedImports": "explicit",
+                    "source.organizeImports": "explicit",
+                    "source.fixAll.markdownlint": "explicit"
+                },
+                "git.enableSmartCommit": true,
+                "java.format.settings.profile": "",
+                "java.format.settings.url": "",
+                "markdown.extension.tableFormatter.normalizeIndentation": true,
+                "editor.formatOnPaste": true,
+                "terminal.integrated.shell.windows": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "editor.fontLigatures": false,
+                "python.languageServer": "Default",
+                "workbench.preferredLightColorTheme": "Default Dark+",
+                "aws.telemetry": false,
+                "terminal.external.windowsExec": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "terminal.integrated.automationShell.windows": "",
+                "terminal.integrated.allowMnemonics": true,
+                "extensions.ignoreRecommendations": false,
+                "editor.find.addExtraSpaceOnTop": false,
+                "editor.find.cursorMoveOnType": false,
+                "editor.fontWeight": "normal",
+                "hediet.vscode-drawio.local-storage": "eyIuZHJhd2lvLWNvbmZpZyI6IntcImxhbmd1YWdlXCI6XCJcIixcImN1c3RvbUZvbnRzXCI6W10sXCJsaWJyYXJpZXNcIjpcImdlbmVyYWxcIixcImN1c3RvbUxpYnJhcmllc1wiOltcIkwuc2NyYXRjaHBhZFwiXSxcInBsdWdpbnNcIjpbXSxcInJlY2VudENvbG9yc1wiOltcIkZGRkZGRlwiXSxcImZvcm1hdFdpZHRoXCI6XCIyNDBcIixcImNyZWF0ZVRhcmdldFwiOmZhbHNlLFwicGFnZUZvcm1hdFwiOntcInhcIjowLFwieVwiOjAsXCJ3aWR0aFwiOjg1MCxcImhlaWdodFwiOjExMDB9LFwic2VhcmNoXCI6dHJ1ZSxcInNob3dTdGFydFNjcmVlblwiOnRydWUsXCJncmlkQ29sb3JcIjpcIiNkMGQwZDBcIixcImRhcmtHcmlkQ29sb3JcIjpcIiM2ZTZlNmVcIixcImF1dG9zYXZlXCI6dHJ1ZSxcInJlc2l6ZUltYWdlc1wiOm51bGwsXCJvcGVuQ291bnRlclwiOjAsXCJ2ZXJzaW9uXCI6MTgsXCJ1bml0XCI6MSxcImlzUnVsZXJPblwiOmZhbHNlLFwidWlcIjpcIlwifSJ9",
+                "git.confirmSync": false,
+                "python.analysis.completeFunctionParens": true,
+                "git.autofetch": true,
+                "remote.SSH.remotePlatform": {
+                    "home": "linux",
+                    "cal": "linux",
+                    "54.170.104.225": "linux"
+                },
+                "editor.formatOnSave": true,
+                "workbench.editor.decorations.colors": false,
+                "javascript.format.semicolons": "insert",
+                "codesnap.transparentBackground": true,
+                "telemetry.telemetryLevel": "off",
+                "cSpell.userWords": [
+                    "backtest",
+                    "Backtesting",
+                    "SQQQ",
+                    "TQQQ",
+                    "UVXY",
+                    "weibo",
+                    "Zheng"
+                ],
+                "markdown.extension.toc.orderedList": true,
+                "markdown.extension.list.indentationSize": "inherit",
+                "security.workspace.trust.untrustedFiles": "open",
+                "workbench.colorTheme": "Darcula Theme from IntelliJ",
+                "workbench.iconTheme": "vscode-jetbrains-icon-theme",
+                "editor.fontSize": 13,
+                "editor.accessibilitySupport": "off",
+                "python.autoComplete.extraPaths": [
+                    "${workspaceFolder}"
+                ],
+                "python.analysis.extraPaths": [
+                    "${workspaceFolder}"
+                ],
+                "python.analysis.autoImportCompletions": true,
+                "launch": {
+                    "configurations": [
+                        {
+                            "name": "Python: Current File",
+                            "type": "debugpy",
+                            "request": "launch",
+                            "program": "${file}",
+                            "console": "internalConsole",
+                            "cwd": "${workspaceFolder}",
+                            "env": {
+                                "PYTHONPATH": "${workspaceFolder}${pathSeparator}${env:PYTHONPATH}"
+                            }
+                        }
+                    ],
+                    "compounds": []
+                },
+                "python.analysis.typeCheckingMode": "basic",
+                "gitlens.currentLine.enabled": false,
+                "gitlens.hovers.currentLine.over": "line",
+                "gitlens.codeLens.enabled": false,
+                "python.analysis.diagnosticSeverityOverrides": {
+                    "reportUnusedImport": "information",
+                },
+                "python.analysis.autoImportUserSymbols": true,
+                "python.analysis.fixAll": [
+                    "source.convertImportFormat",
+                    "source.unusedImports"
+                ],
+                "git.postCommitCommand": "sync",
+                "python.terminal.activateEnvInCurrentTerminal": true,
+                "aws.codeWhisperer.shareCodeWhispererContentWithAWS": false,
+                "aws.suppressPrompts": {
+                    "codeWhispererConnectionExpired": true
+                },
+                "terminal.integrated.env.windows": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+                "terminal.integrated.env.osx": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+                "debug.toolBarLocation": "commandCenter",
+                "gitlens.graph.minimap.enabled": false,
+                "workbench.activityBar.location": "top",
+                "workbench.editor.splitSizing": "distribute",
+                "remote.autoForwardPortsSource": "hybrid",
+                "git.openRepositoryInParentFolders": "never",
+                "[css]": {
+                    "editor.defaultFormatter": "vscode.css-language-features"
+                },
+                "terminal.integrated.enableMultiLinePasteWarning": false,
+                "gitlens.hovers.enabled": false,
+                "python.experiments.enabled": false,
+            },
+            // Add the IDs of extensions you want installed when the container is created.
+            "extensions": [
+                "analytic-signal.preview-pdf",
+                "chadalen.vscode-jetbrains-icon-theme",
+                "charliermarsh.ruff",
+                "github.copilot",
+                "github.copilot-chat",
+                "github.vscode-github-actions",
+                "golang.go",
+                "mechatroner.rainbow-csv",
+                "mhutchie.git-graph",
+                "ms-python.debugpy",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-vscode-remote.remote-containers",
+                "ms-vscode-remote.remote-ssh",
+                "ms-vscode-remote.remote-wsl",
+                "ms-vscode-remote.vscode-remote-extensionpack",
+                "ms-vscode.makefile-tools",
+                "ms-vscode.remote-explorer",
+                "ms-vscode.remote-server",
+                "pkief.material-icon-theme",
+                "streetsidesoftware.code-spell-checker",
+                "trinm1709.dracula-theme-from-intellij",
+                "yzhang.markdown-all-in-one",
+                "4regab.tasksync-chat",
+                "donjayamanne.githistory",
+            ]
+        }
     },
     // Use 'forwardPorts' to make a list of ports inside the container available locally.
     // "forwardPorts": [],
@@ -29,5 +370,5 @@
     // Configure tool-specific properties.
     // "customizations": {},
     // Uncomment to connect as an existing user other than the container default. More info: https://aka.ms/dev-containers-non-root.
-    // "remoteUser": "devcontainer"
+    // "remoteUser": "${localEnv:USERPROFILE}"
 }
