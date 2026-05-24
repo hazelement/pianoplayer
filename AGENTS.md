@@ -43,7 +43,7 @@ Python 3.12. Virtual environment at `.venv/`.
 
 ## Critical Gotchas
 
-1. **No setup.py or pyproject.toml** — the package has no installable definition. The Dockerfile references `pip install -e .` which will fail. Do NOT add a setup.py unless explicitly asked.
+1. **No setup.py or pyproject.toml** — the package is not installed. The Dockerfile uses `ENV PYTHONPATH=/app` to access modules directly from source. Do NOT add a setup.py unless explicitly asked.
 
 2. **Hand size is boolean flags, not a single parameter** — `annotate_with_args()` takes `hand_size_M`, `hand_size_XL`, etc. as separate booleans. Only one should be `True`. The Flask app maps the string hand size to these flags. If you add a new hand size, you must update: `utils.handSizeFactor()`, `core.annotate()` flag handling, `app.py` flag mapping, and `templates/index.html` `<option>`.
 
@@ -56,8 +56,6 @@ Python 3.12. Virtual environment at `.venv/`.
 6. **Algorithm depth is 3–9** — `Hand.optimize_seq()` uses nested loops for up to 9 notes. Depth 0 means "auto" (time-based). The combinatorial search is O(5^depth) in the worst case.
 
 7. **Left hand notes are mirrored** — `Hand.generate()` negates `anote.x` for left hand to simulate mirrored keyboard. This is internal to the algorithm, not a bug.
-
-8. **Dockerfile uses Python 3.9, local env is 3.12** — The Dockerfile specifies `python:3.9-slim` but the local `.venv/` is Python 3.12. The Dockerfile's `pip install -e .` will fail since there's no setup.py.
 
 ## File Format Support
 
