@@ -201,6 +201,15 @@
             padding: 15px;
         }
 
+        small.hint {
+            display: block;
+            margin-top: 4px;
+            color: var(--md-sys-color-on-surface-variant);
+            font-size: 0.75rem;
+            font-weight: 400;
+            letter-spacing: 0.25px;
+        }
+
         .file-info {
             display: none;
             background: var(--md-sys-color-secondary-container);
@@ -371,12 +380,24 @@
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
             <div class="upload-text">Click to upload or drag and drop</div>
-            <div class="upload-hint">MIDI (.mid, .midi) or MusicXML (.xml, .musicxml, .mscz)</div>
-            <input type="file" id="fileInput" accept=".mid,.midi,.xml,.musicxml,.mscz,.mscx">
+            <div class="upload-hint">MIDI (.mid, .midi), MusicXML (.xml, .musicxml, .mscz), or PDF (.pdf)</div>
+            <input type="file" id="fileInput" accept=".mid,.midi,.xml,.musicxml,.mscz,.mscx,.pdf">
         </div>
 
         <div class="file-info" id="fileInfo">
             <div>Selected file: <span class="file-name" id="fileName"></span></div>
+        </div>
+
+        <div class="form-group" id="engineGroup" style="display:none;">
+            <label for="omrEngine">OMR Engine (PDF only)</label>
+            <select id="omrEngine" name="omrEngine">
+                <option value="auto" selected>Auto-detect (recommended)</option>
+                <option value="builtin">Built-in (vector PDFs only)</option>
+                <option value="audiveris">Audiveris (scanned PDFs)</option>
+            </select>
+            <small class="hint" id="engineHint" style="display:none;">
+                Auto-detect chooses the best engine for your PDF type.
+            </small>
         </div>
 
         <div class="form-group">
@@ -450,6 +471,17 @@
                 fileInfo.classList.add('show');
                 processBtn.disabled = false;
                 message.classList.remove('show');
+
+                // Show/hide OMR engine selector based on file type
+                const engineGroup = document.getElementById('engineGroup');
+                const engineHint = document.getElementById('engineHint');
+                if (file && file.name.toLowerCase().endsWith('.pdf')) {
+                    engineGroup.style.display = 'block';
+                    engineHint.style.display = 'block';
+                } else {
+                    engineGroup.style.display = 'none';
+                    engineHint.style.display = 'none';
+                }
             }
 
             // Process button
@@ -459,10 +491,19 @@
                 const formData = new FormData();
                 formData.append('file', selectedFile);
                 formData.append('handSize', handSize.value);
+                formData.append('omrEngine', document.getElementById('omrEngine').value);
 
                 processBtn.disabled = true;
                 processing.classList.add('show');
                 message.classList.remove('show');
+
+                // Update processing message based on file type
+                const processingText = document.querySelector('.processing-text');
+                if (selectedFile.name.toLowerCase().endsWith('.pdf')) {
+                    processingText.textContent = 'Converting PDF and adding fingerings... PDF processing may take up to 10 minutes.';
+                } else {
+                    processingText.textContent = 'Processing your file... This may take a moment.';
+                }
 
                 try {
                     const response = await fetch('/upload', {

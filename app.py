@@ -5,10 +5,10 @@ from werkzeug.utils import secure_filename
 from pianoplayer.core import annotate_with_args
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size (PDFs can be large)
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
 
-ALLOWED_EXTENSIONS = {'mid', 'midi', 'xml', 'musicxml', 'mscz', 'mscx'}
+ALLOWED_EXTENSIONS = {'mid', 'midi', 'xml', 'musicxml', 'mscz', 'mscx', 'pdf'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -27,7 +27,7 @@ def upload_file():
         return jsonify({'error': 'No file selected'}), 400
     
     if not allowed_file(file.filename):
-        return jsonify({'error': 'Invalid file type. Please upload MIDI or MusicXML files.'}), 400
+        return jsonify({'error': 'Invalid file type. Please upload MIDI, MusicXML, MuseScore, or PDF files.'}), 400
     
     try:
         # Save uploaded file
@@ -35,11 +35,16 @@ def upload_file():
         input_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(input_path)
         
-        # Get hand size from request
+        # Get hand size and OMR engine from request
         hand_size = request.form.get('handSize', 'M')
+        engine = request.form.get('omrEngine', 'auto')
         
-        # Generate output filename
-        output_filename = 'annotated_' + os.path.splitext(filename)[0] + '.xml'
+        # Generate output filename (PDF input → PDF output, others → XML)
+        base_name = os.path.splitext(filename)[0]
+        if filename.lower().endswith('.pdf'):
+            output_filename = f'annotated_{base_name}.pdf'
+        else:
+            output_filename = f'annotated_{base_name}.xml'
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
         
         # Process the file
@@ -65,7 +70,8 @@ def upload_file():
             hand_size_M=(hand_size == 'M'),
             hand_size_L=(hand_size == 'L'),
             hand_size_XL=(hand_size == 'XL'),
-            hand_size_XXL=(hand_size == 'XXL')
+            hand_size_XXL=(hand_size == 'XXL'),
+            omr_engine=engine
         )
         
         # Clean up input file
@@ -78,14 +84,20 @@ def upload_file():
     
     except Exception as e:
         # Clean up on error
-        if os.path.exists(input_path):
-            os.remove(input_path)
+        for path in [input_path, output_path]:
+            if os.path.exists(path):
+                os.remove(path)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/download/<filename>')
 def download_file(filename):
     try:
+        filename = secure_filename(filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        real_path = os.path.realpath(file_path)
+        real_upload = os.path.realpath(app.config['UPLOAD_FOLDER'])
+        if not real_path.startswith(real_upload + os.sep) and real_path != real_upload:
+            return jsonify({'error': 'Invalid file path'}), 403
         response = send_file(file_path, as_attachment=True, download_name=filename)
         
         # Clean up after sending
@@ -97,6 +109,10 @@ def download_file(filename):
         return response
     except Exception as e:
         return jsonify({'error': 'File not found'}), 404
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'}), 200
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

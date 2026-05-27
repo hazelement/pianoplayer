@@ -72,3 +72,32 @@ Output is always MusicXML (`.xml`) unless `.txt` is specified (PIG format).
 XXS (0.33x) → XS (0.46x) → S (0.64x) → **M (0.82x, default)** → L (1.0x) → XL (1.1x) → XXL (1.2x)
 
 Factors in `utils.handSizeFactor()` scale the resting finger positions in `Hand.__init__()`.
+
+## PDF Parser Integration
+
+PDF input is supported via dual-engine OMR: built-in vector parser and Audiveris. Routing logic in `conversion.convert_pdf_to_musicxml()`.
+
+| Input | Handler |
+|-------|---------|
+| `.pdf` (vector) | Built-in parser via `pdf_parser.py` |
+| `.pdf` (raster/scanned) | Audiveris (requires `AUDIVERIS_HOME` or `AUDIVERIS_JAR_PATH`) |
+| `.pdf` (auto) | Detects type: VECTOR → builtin, RASTER/AMBIGUOUS → Audiveris |
+
+**Engine selection:** `omr_engine` parameter in `annotate_with_args()`: `"auto"` (default), `"builtin"`, `"audiveris"`. Falls back to alternate engine once if primary fails (N-1: no bounce back).
+
+**Multi-page PDFs:** Always routed to Audiveris (N-2). Built-in parser processes first page only.
+
+### PDF Parser Limitations
+
+The built-in vector PDF parser (`pianoplayer/pdf_parser.py`) has these known limitations:
+
+- **Key signature:** Always C major (no sharps/flats detected). Accidentals are inferred from note head position only.
+- **Time signature:** Always 4/4. Actual time signatures are not detected.
+- **Duration inference:** Uses spatial heuristics (chord spacing, beam detection) only. Accuracy varies with score layout.
+- **Multi-page:** First page only. Multi-page PDFs are routed to Audiveris automatically.
+- **Accuracy:** ~90-95% on clean vector PDFs. Degrades on complex scores with dense beaming, articulations, or non-standard notation.
+- **Articulations/expressions:** Not detected (no dynamics, tempo marks, or articulation symbols).
+
+### PDF Export
+
+Annotated MusicXML → PDF export uses MuseScore CLI (`export_musicxml_to_pdf()` in `conversion.py`). Requires MuseScore 3.x or 4.x installed. In headless environments, set `QT_QPA_PLATFORM=offscreen`.

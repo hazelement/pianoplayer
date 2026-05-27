@@ -1,288 +1,944 @@
+from __future__ import annotations
+
+import contextlib
 import csv
-import json
-import os, sys
+import logging
+import os
 import platform
+import subprocess
+import sys
+import tempfile
+import time
+from types import SimpleNamespace
+from typing import Any
 
-from music21 import converter, stream
-from music21.articulations import Fingering
-
+from pianoplayer.conversion import (
+    convert_pdf_to_musicxml,
+    export_musicxml_to_pdf,
+)
+from pianoplayer.layout import analyze_pdf_layout
+from pianoplayer.errors import ConversionError, ExternalToolError, MissingDependencyError
 from pianoplayer.hand import Hand
-from pianoplayer.scorereader import reader, PIG2Stream, reader_pretty_midi, reader_PIG
-import pretty_midi
+from pianoplayer.models import AnnotateOptions
+from pianoplayer.musicxml_io import (
+    annotate_part_with_fingering,
+    clear_part_fingering,
+    inject_layout_breaks,
+    parse_musicxml,
+)
+from pianoplayer.scorereader import reader, reader_PIG, reader_pretty_midi
+
+logger = logging.getLogger(__name__)
+
+_MIN_MANUAL_DEPTH = 5
+_MAX_MANUAL_DEPTH = 9
+_HAND_SIZES = {"XXS", "XS", "S", "M", "L", "XL", "XXL"}
 
 
-###########################################################
-# Piano Player main analyse and annotate
-###########################################################
-# def run_analyse():
-#     pass
-#
-#
-# def analyse():
-#     pass
+class _ProgressReporter:
+    """Progress wrapper with Rich UI and a text-log fallback."""
 
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self._active = False
+        self._progress = None
+        self._parse_task = None
+        self._rh_task = None
+        self._lh_task = None
+        self._write_task = None
+        self._text_bucket = {"right": -1, "left": -1}
 
-def run_annotate(filename,
-                 outputfile='output.xml',
-                 n_measures=100,
-                 start_measure=1,
-                 depth=0,
-                 rbeam=0,
-                 lbeam=1,
-                 quiet=False,
-                 musescore=False,
-                 below_beam=False,
-                 with_vedo=0,
-                 vedo_speed=False,
-                 sound_off=False,
-                 left_only=False,
-                 right_only=False,
-                 hand_size_XXS=False,
-                 hand_size_XS=False,
-                 hand_size_S=False,
-                 hand_size_M=False,
-                 hand_size_L=False,
-                 hand_size_XL=True,
-                 hand_size_XXL=False
-                 ):
-    class Args(object):
-        pass
-    args = Args()
-    args.filename = filename
-    args.outputfile = outputfile
-    args.n_measures = n_measures
-    args.start_measure = start_measure
-    args.depth = depth
-    args.rbeam = rbeam
-    args.lbeam = lbeam
-    args.quiet = quiet
-    args.musescore = musescore
-    args.below_beam = below_beam
-    args.with_vedo = with_vedo
-    args.vedo_speed = vedo_speed
-    args.sound_off = sound_off
-    args.left_only = left_only
-    args.right_only = right_only
-    args.hand_size_XXS = hand_size_XXS
-    args.hand_size_XS = hand_size_XS
-    args.hand_size_S = hand_size_S
-    args.hand_size_M = hand_size_M
-    args.hand_size_L = hand_size_L
-    args.hand_size_XL = hand_size_XL
-    args.hand_size_XXL = hand_size_XXL
-    annotate(args)
+    def __enter__(self):
+        if not self.enabled:
+            return self
 
-
-def annotate_fingers_xml(sf, hand, args, is_right=True):
-    p0 = sf.parts[args.rbeam if is_right else args.lbeam]
-    idx = 0
-    noteseq_len = len(hand.noteseq)
-    for el in p0.flat.getElementsByClass("GeneralNote"):
-        if el.isNote:
-            if idx >= noteseq_len:
-                break  # No more fingerings available
-            n = hand.noteseq[idx]
-            if hand.lyrics:
-                el.addLyric(n.fingering)
-            else:
-                el.articulations.append(Fingering(n.fingering))
-            idx += 1
-        elif el.isChord:
-            for j, cn in enumerate(el.pitches):
-                if idx >= noteseq_len:
-                    break  # No more fingerings available
-                n = hand.noteseq[idx]
-                if hand.lyrics:
-                    nl = len(cn.chord21.pitches) - cn.chordnr
-                    el.addLyric(cn.fingering, nl)
-                else:
-                    el.articulations.append(Fingering(n.fingering))
-                idx += 1
-
-    return sf
-
-
-def annotate_PIG(hand, is_right=True):
-    ans = []
-    for n in hand.noteseq:
-        onset_time = "{:.4f}".format(n.time)
-        offset_time = "{:.4f}".format(n.time + n.duration)
-        spelled_pitch = n.pitch
-        onset_velocity = str(None)
-        offset_velocity = str(None)
-        channel = '0' if is_right else '1'
-        finger_number = n.fingering if is_right else -n.fingering
-        cost = n.cost
-        ans.append((onset_time, offset_time, spelled_pitch, onset_velocity, offset_velocity, channel,
-                    finger_number, cost, n.noteID))
-    return ans
-
-
-def annotate_with_args(filename, outputfile='output.xml', n_measures=100, start_measure=1, 
-                       depth=0, rbeam=0, lbeam=1, quiet=False, musescore=False, 
-                       below_beam=False, with_vedo=False, vedo_speed=1.5, sound_off=True,
-                       left_only=False, right_only=False, hand_size_XXS=False, 
-                       hand_size_XS=False, hand_size_S=False, hand_size_M=False,
-                       hand_size_L=False, hand_size_XL=False, hand_size_XXL=False):
-    """Wrapper function for programmatic access (Flask web app)"""
-    import argparse
-    args = argparse.Namespace(
-        filename=filename, outputfile=outputfile, n_measures=n_measures,
-        start_measure=start_measure, depth=depth, rbeam=rbeam, lbeam=lbeam,
-        quiet=quiet, musescore=musescore, below_beam=below_beam,
-        with_vedo=with_vedo, vedo_speed=vedo_speed, sound_off=sound_off,
-        left_only=left_only, right_only=right_only,
-        hand_size_XXS=hand_size_XXS, hand_size_XS=hand_size_XS,
-        hand_size_S=hand_size_S, hand_size_M=hand_size_M,
-        hand_size_L=hand_size_L, hand_size_XL=hand_size_XL,
-        hand_size_XXL=hand_size_XXL
-    )
-    annotate(args)
-
-
-def annotate(args):
-    hand_size = 'M'  # default
-    if args.hand_size_XXS: hand_size = 'XXS'
-    if args.hand_size_XS: hand_size = 'XS'
-    if args.hand_size_S: hand_size = 'S'
-    if args.hand_size_M: hand_size = 'M'
-    if args.hand_size_L: hand_size = 'L'
-    if args.hand_size_XL: hand_size = 'XL'
-    if args.hand_size_XXL: hand_size = 'XXL'
-
-    xmlfn = args.filename
-    if '.msc' in args.filename:
         try:
-            xmlfn = str(args.filename).replace('.mscz', '.xml').replace('.mscx', '.xml')
-            print('..trying to convert your musescore file to', xmlfn)
-            os.system(
-                'musescore -f "' + args.filename + '" -o "' + xmlfn + '"')  # quotes avoid problems w/ spaces in filename
-            sf = converter.parse(xmlfn)
-            if not args.left_only:
-                rh_noteseq = reader(sf, beam=args.rbeam)
-            if not args.right_only:
-                lh_noteseq = reader(sf, beam=args.lbeam)
-        except:
-            print('Unable to convert file, try to do it from musescore.')
-            sys.exit()
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                SpinnerColumn,
+                TextColumn,
+                TimeRemainingColumn,
+            )
 
-    elif '.txt' in args.filename:
-        if not args.left_only:
-            rh_noteseq = reader_PIG(args.filename, args.rbeam)
-        if not args.right_only:
-            lh_noteseq = reader_PIG(args.filename, args.lbeam)
+            self._progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(bar_width=26),
+                TextColumn("{task.completed}/{task.total}"),
+                TextColumn("[dim]{task.fields[status]}"),
+                TimeRemainingColumn(),
+            )
+            self._progress.start()
 
-    elif '.mid' in args.filename or '.midi' in args.filename:
-        pm = pretty_midi.PrettyMIDI(args.filename)
-        if not args.left_only:
-            pm_right = pm.instruments[args.rbeam]
-            rh_noteseq = reader_pretty_midi(pm_right, beam=args.rbeam)
-        if not args.right_only:
-            pm_left = pm.instruments[args.lbeam]
-            lh_noteseq = reader_pretty_midi(pm_left, beam=args.lbeam)
+            self._rh_task = self._progress.add_task("Generate RH", total=1, visible=False)
+            self._lh_task = self._progress.add_task("Generate LH", total=1, visible=False)
+            self._active = True
+        except Exception:
+            self._active = False
 
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._active and self._progress is not None:
+            with contextlib.suppress(Exception):
+                self._progress.stop()
+
+    def parse_done(self) -> None:
+        if self._active and self._progress is not None and self._parse_task is not None:
+            self._progress.update(self._parse_task, completed=1)
+
+    def start_hand(self, side: str, total: int) -> None:
+        if not self._active or self._progress is None:
+            if self.enabled:
+                logger.info("Generate %s hand: start (%s notes)", side.upper(), total)
+            return
+
+        task = self._rh_task if side == "right" else self._lh_task
+        self._progress.update(
+            task,
+            total=max(1, total),
+            completed=0,
+            visible=True,
+            status="m-- \u00b7 0%",
+        )
+
+    def update_hand(
+        self,
+        side: str,
+        completed: int,
+        total: int,
+        measure: int | None = None,
+    ) -> None:
+        if not self._active or self._progress is None:
+            if self.enabled and total:
+                bucket = int((completed * 10) / max(1, total))
+                if bucket > self._text_bucket[side]:
+                    self._text_bucket[side] = bucket
+                    logger.info(
+                        "Generate %s hand: %s%%",
+                        side.upper(),
+                        min(100, bucket * 10),
+                    )
+            return
+
+        task = self._rh_task if side == "right" else self._lh_task
+        done = min(completed, max(1, total))
+        percent = int((done * 100) / max(1, total))
+        meas = "--" if not measure else str(measure)
+        self._progress.update(task, completed=done, status=f"meas.{meas} \u00b7 {percent}%")
+
+    def hand_done(self, side: str) -> None:
+        if not self._active or self._progress is None:
+            if self.enabled:
+                logger.info("Generate %s hand: done", side.upper())
+            return
+        task = self._rh_task if side == "right" else self._lh_task
+        current_total = int(self._progress.tasks[task].total or 1)
+        self._progress.update(task, completed=current_total, status="done")
+
+    def write_start(self) -> None:
+        if self._active and self._progress is not None and self._write_task is not None:
+            self._progress.update(self._write_task, total=1, completed=0, visible=True)
+
+    def write_done(self) -> None:
+        if self._active and self._progress is not None and self._write_task is not None:
+            self._progress.update(self._write_task, completed=1)
+
+
+def run_annotate(
+    filename,
+    outputfile="output.xml",
+    n_measures=1000,
+    start_measure=1,
+    depth=0,
+    rpart=0,
+    lpart=1,
+    rstaff=0,
+    lstaff=0,
+    auto_routing=True,
+    quiet=False,
+    musescore=False,
+    below_beam=False,
+    with_vedo=0,
+    sound_off=False,
+    left_only=False,
+    right_only=False,
+    hand_size="M",
+    chord_note_stagger_s=0.05,
+):
+    """Programmatic entry point mirroring CLI options."""
+    options = AnnotateOptions(
+        filename=filename,
+        outputfile=outputfile,
+        n_measures=n_measures,
+        start_measure=start_measure,
+        depth=depth,
+        rpart=rpart,
+        lpart=lpart,
+        rstaff=rstaff,
+        lstaff=lstaff,
+        auto_routing=auto_routing,
+        quiet=quiet,
+        musescore=musescore,
+        below_beam=below_beam,
+        with_vedo=with_vedo,
+        sound_off=sound_off,
+        left_only=left_only,
+        right_only=right_only,
+        hand_size=hand_size,
+        chord_note_stagger_s=chord_note_stagger_s,
+    )
+    options_ns = options.to_namespace()
+    options_ns._show_progress = not bool(quiet)
+    annotate(options_ns)
+
+
+def annotate_with_args(filename, outputfile="output.xml", n_measures=100, start_measure=1,
+                       depth=0, rbeam=0, lbeam=1, quiet=False, musescore=False,
+                       below_beam=False, with_vedo=False, vedo_speed=1.5, sound_off=True,
+                       left_only=False, right_only=False, hand_size_XXS=False,
+                       hand_size_XS=False, hand_size_S=False, hand_size_M=False,
+                       hand_size_L=False, hand_size_XL=False, hand_size_XXL=False,
+                       omr_engine: str = "auto"):
+    """Wrapper function for programmatic access (Flask web app).
+
+    Accepts legacy parameter names (rbeam/lbeam, hand_size_* booleans) for
+    backward compatibility with the Flask app.
+    """
+    # Resolve hand size from boolean flags
+    hand_size = "M"  # default
+    if hand_size_XXS:
+        hand_size = "XXS"
+    elif hand_size_XS:
+        hand_size = "XS"
+    elif hand_size_S:
+        hand_size = "S"
+    elif hand_size_M:
+        hand_size = "M"
+    elif hand_size_L:
+        hand_size = "L"
+    elif hand_size_XL:
+        hand_size = "XL"
+    elif hand_size_XXL:
+        hand_size = "XXL"
+
+    # Handle PDF input: convert to MusicXML via OMR first
+    input_path = filename
+    _omr_temp = None
+    _is_pdf_input = filename.lower().endswith(".pdf")
+    if _is_pdf_input:
+        _omr_fd, _omr_temp = tempfile.mkstemp(suffix="_omr.xml")
+        os.close(_omr_fd)
+        logger.info("Converting PDF to MusicXML via OMR: %s", filename)
+        success, xml_path, error_msg = convert_pdf_to_musicxml(filename, _omr_temp, engine=omr_engine)
+        if not success:
+            raise ConversionError(f"PDF OMR conversion failed: {error_msg}")
+        input_path = xml_path
+        logger.info("OMR complete: %s", input_path)
+
+    # Handle PDF output: use intermediate XML, then convert
+    output_path = outputfile
+    is_pdf_output = str(outputfile).lower().endswith(".pdf")
+    _temp_xml = None
+    if is_pdf_output:
+        _temp_xml = outputfile.replace(".pdf", "_annotated.xml")
+        output_path = _temp_xml
+
+    try:
+        options = AnnotateOptions(
+            filename=input_path,
+            outputfile=output_path,
+            n_measures=n_measures,
+            start_measure=start_measure,
+            depth=depth,
+            rpart=rbeam,
+            lpart=lbeam,
+            rstaff=0,
+            lstaff=0,
+            auto_routing=True,
+            quiet=quiet,
+            musescore=False,
+            below_beam=below_beam,
+            with_vedo=False,
+            sound_off=sound_off,
+            left_only=left_only,
+            right_only=right_only,
+            hand_size=hand_size,
+            chord_note_stagger_s=0.05,
+        )
+        # Layout preservation: analyze PDF geometry upfront so layout_info
+        # can be threaded through annotate() and injected before score_info.write().
+        layout_info = None
+        if _is_pdf_input and _omr_temp and os.path.isfile(_omr_temp):
+            layout_info = analyze_pdf_layout(filename, _omr_temp)
+            if layout_info is None:
+                logger.warning(
+                    "PDF layout analysis returned no results. "
+                    "MuseScore will use auto-reflow."
+                )
+
+        options_ns = options.to_namespace()
+        options_ns._show_progress = False
+        annotate(options_ns, layout_info=layout_info)
+
+        # Convert annotated MusicXML to PDF if needed
+        if is_pdf_output and _temp_xml and os.path.isfile(_temp_xml):
+            logger.info("Exporting annotated score to PDF: %s", outputfile)
+            success, pdf_path, error_msg = export_musicxml_to_pdf(_temp_xml, outputfile)
+            if not success:
+                raise ConversionError(f"PDF export failed: {error_msg}")
+            logger.info("PDF export complete: %s", outputfile)
+    finally:
+        # Clean up intermediate files
+        if _temp_xml and os.path.isfile(_temp_xml):
+            os.remove(_temp_xml)
+        if _omr_temp and os.path.isfile(_omr_temp):
+            os.remove(_omr_temp)
+
+
+def _as_namespace(args: Any) -> SimpleNamespace:
+    """Normalize accepted arg containers to ``SimpleNamespace``."""
+    if isinstance(args, AnnotateOptions):
+        return args.to_namespace()
+    if isinstance(args, SimpleNamespace):
+        return args
+    return AnnotateOptions.from_namespace(args).to_namespace()
+
+
+def _resolve_input_filename(filename: str) -> str:
+    """Resolve score path, trying local `scores/` when a bare filename is passed."""
+    if os.path.exists(filename):
+        return filename
+
+    candidate = os.path.join("scores", filename)
+    if os.path.exists(candidate):
+        logger.info("Resolved input file '%s' to '%s'.", filename, candidate)
+        return candidate
+
+    raise FileNotFoundError(f"Input score not found: {filename}")
+
+
+def _run_external(cmd: list[str], context: str) -> None:
+    """Execute an external command while silencing stdout/stderr."""
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError as exc:
+        raise ExternalToolError(f"Required executable not found for {context}: {cmd[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise ExternalToolError(f"External command failed for {context}: {' '.join(cmd)}") from exc
+
+
+def _normalize_single_part_parts(args: SimpleNamespace, score_info: Any) -> None:
+    """Map selected-hand part to 0 when the score has only one part."""
+    parts = getattr(score_info, "parts", None)
+    if parts is None or len(parts) != 1:
+        return
+
+    if args.rpart != 0:
+        logger.info("Single-part score detected: remapping right-hand part %s -> 0", args.rpart)
+        args.rpart = 0
+    if args.lpart != 0:
+        logger.info("Single-part score detected: remapping left-hand part %s -> 0", args.lpart)
+        args.lpart = 0
+
+
+def _part_staffs(score_info: Any, part: int) -> set[int]:
+    """Collect declared MusicXML staff numbers for one part index."""
+    parts = getattr(score_info, "parts", None)
+    if parts is None or part < 0 or part >= len(parts):
+        return set()
+    staffs: set[int] = set()
+    for evt in parts[part].events:
+        for note_el in evt.notes:
+            txt = note_el.findtext("staff", "").strip()
+            if txt.isdigit():
+                staffs.add(int(txt))
+    return staffs
+
+
+def _resolve_staff_target(
+    args: SimpleNamespace, score_info: Any, *, is_right: bool
+) -> int | None:
+    """Resolve target staff for one hand.
+
+    Priority:
+    1. explicit `--rstaff/--lstaff`,
+    2. single-part auto defaults (RH->staff 1, LH->staff 2 when available),
+    3. `None` for part-based routing.
+    """
+    explicit = int(args.rstaff if is_right else args.lstaff)
+    if explicit > 0:
+        return explicit
+
+    parts = getattr(score_info, "parts", None)
+    if parts is None or len(parts) != 1:
+        return None
+
+    staffs = sorted(_part_staffs(score_info, 0))
+    if not staffs:
+        return None
+
+    if is_right:
+        if 1 in staffs:
+            return 1
+        return staffs[0]
+
+    if 2 in staffs:
+        return 2
+    if len(staffs) > 1:
+        return staffs[-1]
+    return staffs[0]
+
+
+def _resolve_musicxml_routing(args: SimpleNamespace, score_info: Any) -> None:
+    """Compute and store resolved part/staff routing for RH/LH."""
+    parts = getattr(score_info, "parts", None) or []
+    auto_routing = bool(getattr(args, "auto_routing", True))
+    if auto_routing:
+        _normalize_single_part_parts(args, score_info)
+        if len(parts) > 1:
+            args.rpart = max(0, min(int(args.rpart), len(parts) - 1))
+            args.lpart = max(0, min(int(args.lpart), len(parts) - 1))
+        args._resolved_rstaff = _resolve_staff_target(args, score_info, is_right=True)
+        args._resolved_lstaff = _resolve_staff_target(args, score_info, is_right=False)
     else:
-        sc = converter.parse(xmlfn)
-        if not args.left_only:
-            rh_noteseq = reader(sc, beam=args.rbeam)
-        if not args.right_only:
-            lh_noteseq = reader(sc, beam=args.lbeam)
+        if parts:
+            args.rpart = max(0, min(int(args.rpart), len(parts) - 1))
+            args.lpart = max(0, min(int(args.lpart), len(parts) - 1))
+        args._resolved_rstaff = int(args.rstaff) if int(args.rstaff) > 0 else None
+        args._resolved_lstaff = int(args.lstaff) if int(args.lstaff) > 0 else None
+
+    logger.info(
+        "Resolved routing (%s): RH part %s%s | LH part %s%s",
+        "auto" if auto_routing else "manual",
+        args.rpart,
+        f" staff {args._resolved_rstaff}" if args._resolved_rstaff else "",
+        args.lpart,
+        f" staff {args._resolved_lstaff}" if args._resolved_lstaff else "",
+    )
+
+
+def _filter_noteseq_by_staff(noteseq: list[Any] | None, staff: int | None) -> list[Any] | None:
+    """Restrict one hand note sequence to a specific staff when requested."""
+    if noteseq is None or staff is None:
+        return noteseq
+    return [n for n in noteseq if int(getattr(n, "staff", 0)) == staff]
+
+
+def load_note_sequences(args):
+    """Load score input and produce internal RH/LH note sequences."""
+    args = _as_namespace(args)
+
+    xmlfn = str(args.filename)
+    score_info = None
+    rh_noteseq = None
+    lh_noteseq = None
+
+    try:
+        args.filename = _resolve_input_filename(str(args.filename))
+        xmlfn = args.filename
+        ext = os.path.splitext(str(args.filename).lower())[1]
+
+        if ext in {".mscz", ".mscx"}:
+            xmlfn = str(args.filename).replace(".mscz", ".xml").replace(".mscx", ".xml")
+            logger.info("Converting MuseScore file %s -> %s", args.filename, xmlfn)
+            _run_external(["musescore", "-f", args.filename, "-o", xmlfn], "MuseScore conversion")
+            score_info = parse_musicxml(xmlfn)
+            _resolve_musicxml_routing(args, score_info)
+
+            if not args.left_only:
+                rh_noteseq = reader(
+                    score_info,
+                    beam=args.rpart,
+                    chord_note_stagger_s=args.chord_note_stagger_s,
+                )
+                rh_noteseq = _filter_noteseq_by_staff(
+                    rh_noteseq,
+                    args._resolved_rstaff,
+                )
+
+            if not args.right_only:
+                lh_noteseq = reader(
+                    score_info,
+                    beam=args.lpart,
+                    chord_note_stagger_s=args.chord_note_stagger_s,
+                )
+                lh_noteseq = _filter_noteseq_by_staff(
+                    lh_noteseq,
+                    args._resolved_lstaff,
+                )
+
+        elif ext == ".txt":
+            if not args.left_only:
+                rh_noteseq = reader_PIG(args.filename, args.rpart)
+            if not args.right_only:
+                lh_noteseq = reader_PIG(args.filename, args.lpart)
+
+        elif ext in {".mid", ".midi"}:
+            try:
+                import pretty_midi
+            except ImportError as exc:
+                raise MissingDependencyError(
+                    "MIDI input requires optional dependency 'pretty_midi'. "
+                    "Install with: pip install 'pianoplayer[midi]'"
+                ) from exc
+
+            pm = pretty_midi.PrettyMIDI(args.filename)
+
+            if not args.left_only:
+                rh_noteseq = reader_pretty_midi(
+                    pm.instruments[args.rpart],
+                    beam=args.rpart,
+                    chord_note_stagger_s=args.chord_note_stagger_s,
+                )
+
+            if not args.right_only:
+                lh_noteseq = reader_pretty_midi(
+                    pm.instruments[args.lpart],
+                    beam=args.lpart,
+                    chord_note_stagger_s=args.chord_note_stagger_s,
+                )
+
+        else:
+            # MusicXML (.xml, .mxl) — already converted from PDF if needed
+            score_info = parse_musicxml(xmlfn)
+            _resolve_musicxml_routing(args, score_info)
+
+            if not args.left_only:
+                rh_noteseq = reader(
+                    score_info,
+                    beam=args.rpart,
+                    chord_note_stagger_s=args.chord_note_stagger_s,
+                )
+                rh_noteseq = _filter_noteseq_by_staff(
+                    rh_noteseq,
+                    args._resolved_rstaff,
+                )
+
+            if not args.right_only:
+                lh_noteseq = reader(
+                    score_info,
+                    beam=args.lpart,
+                    chord_note_stagger_s=args.chord_note_stagger_s,
+                )
+                lh_noteseq = _filter_noteseq_by_staff(
+                    lh_noteseq,
+                    args._resolved_lstaff,
+                )
+    except ExternalToolError:
+        raise
+    except FileNotFoundError as exc:
+        raise ConversionError(str(exc)) from exc
+    except Exception as exc:
+        raise ConversionError(
+            f"Unable to parse/convert input score: {args.filename} ({exc})"
+        ) from exc
+
+    return xmlfn, score_info, rh_noteseq, lh_noteseq
+
+
+def generate_hands(args, rh_noteseq, lh_noteseq, progress: _ProgressReporter | None = None):
+    """Create and run right/left hand optimizers according to CLI options."""
+    args = _as_namespace(args)
+
+    hand_size = str(getattr(args, "hand_size", "M")).upper()
+    if hand_size not in _HAND_SIZES:
+        hand_size = "M"
+
+    rh = None
+    lh = None
 
     if not args.left_only:
         rh = Hand(side="right", noteseq=rh_noteseq, size=hand_size)
-        rh.verbose = not (args.quiet)
-        if args.depth == 0:
-            rh.autodepth = True
-        else:
-            rh.autodepth = False
+        rh.verbose = not args.quiet and not (progress is not None and progress.enabled)
+        rh.autodepth = args.depth == 0
+        if not rh.autodepth:
             rh.depth = args.depth
         rh.lyrics = args.below_beam
 
-        rh.generate(args.start_measure, args.n_measures)
+        total = len(rh.noteseq or [])
+        if progress is not None:
+            progress.start_hand("right", total)
+            rh.generate(
+                args.start_measure,
+                args.n_measures,
+                show_progress=lambda done, alln, m: progress.update_hand("right", done, alln, m),
+            )
+            progress.hand_done("right")
+        else:
+            rh.generate(args.start_measure, args.n_measures)
 
     if not args.right_only:
         lh = Hand(side="left", noteseq=lh_noteseq, size=hand_size)
-        lh.verbose = not (args.quiet)
-        if args.depth == 0:
-            lh.autodepth = True
-        else:
-            lh.autodepth = False
+        lh.verbose = not args.quiet and not (progress is not None and progress.enabled)
+        lh.autodepth = args.depth == 0
+        if not lh.autodepth:
             lh.depth = args.depth
         lh.lyrics = args.below_beam
 
-        lh.noteseq = lh_noteseq
-        lh.generate(args.start_measure, args.n_measures)
-
-    if args.outputfile is not None:
-        ext = os.path.splitext(args.outputfile)[1]
-        # an extended PIG file  (note ID) (onset time) (offset time) (spelled pitch) (onset velocity) (offset velocity) (channel) (finger number) (cost)
-        if ext == ".txt":
-            pig_notes = []
-            if not args.left_only:
-                pig_notes.extend(annotate_PIG(rh))
-
-            if not args.right_only:
-                pig_notes.extend(annotate_PIG(lh, is_right=False))
-
-            with open(args.outputfile, 'wt') as out_file:
-                tsv_writer = csv.writer(out_file, delimiter='\t')
-                for idx, (onset_time, offset_time, spelled_pitch, onset_velocity, offset_velocity, channel,
-                          finger_number, cost, id_n) in enumerate(sorted(pig_notes, key=lambda tup: (float(tup[0]), int(tup[5]), int(tup[2])))):
-                    tsv_writer.writerow([idx, onset_time, offset_time, spelled_pitch, onset_velocity, offset_velocity,
-                                         channel, finger_number, cost, id_n])
+        total = len(lh.noteseq or [])
+        if progress is not None:
+            progress.start_hand("left", total)
+            lh.generate(
+                args.start_measure,
+                args.n_measures,
+                show_progress=lambda done, alln, m: progress.update_hand("left", done, alln, m),
+            )
+            progress.hand_done("left")
         else:
-            ext = os.path.splitext(args.filename)[1]
-            if ext in ['mid', 'midi']:
-                sf = converter.parse(xmlfn)
-            elif ext in ['txt']:
-                sf = stream.Stream()
-                if not args.left_only:
-                    ptr = PIG2Stream(args.filename, 0)
-                    sf.insert(0, ptr)
-                if not args.right_only:
-                    ptl = PIG2Stream(args.filename, 1)
-                    sf.insert(0, ptl)  # 0=offset
-            else:
-                sf = converter.parse(xmlfn)
+            lh.generate(args.start_measure, args.n_measures)
 
-            # Annotate fingers in XML
-            if not args.left_only:
-                sf = annotate_fingers_xml(sf, rh, args, is_right=True)
+    return rh, lh
 
-            if not args.right_only:
-                sf = annotate_fingers_xml(sf, lh, args, is_right=False)
-            sf.write('musicxml', fp=args.outputfile)
 
-            if args.musescore:  # -m option
-                print('Opening musescore with output score:', args.outputfile)
-                if platform.system() == 'Darwin':
-                    os.system('open "' + args.outputfile + '"')
-                else:
-                    os.system('musescore "' + args.outputfile + '" > /dev/null 2>&1')
-            else:
-                print("\nTo visualize annotated score with fingering type:\n musescore '" + args.outputfile + "'")
+def write_annotated_output(args, score_info, rh, lh, layout_info=None):
+    """Write annotation results either as PIG text or MusicXML.
 
-    if args.with_vedo:
+    Args:
+        layout_info: Optional LayoutInfo for PDF layout preservation. When provided,
+            layout breaks are injected into the score before writing, eliminating
+            the need for a separate re-parse cycle.
+    """
+    args = _as_namespace(args)
+
+    if args.outputfile is None:
+        return
+
+    if os.path.splitext(args.outputfile)[1] == ".txt":
+        pig_rows = []
+
+        def append_pig_rows(hand, *, is_right: bool) -> None:
+            for note in hand.noteseq:
+                pig_rows.append(
+                    (
+                        f"{note.time:.4f}",
+                        f"{note.time + note.duration:.4f}",
+                        note.pitch,
+                        str(None),
+                        str(None),
+                        "0" if is_right else "1",
+                        note.fingering if is_right else -note.fingering,
+                        note.cost,
+                        note.noteID,
+                    )
+                )
+
+        if not args.left_only and rh is not None:
+            append_pig_rows(rh, is_right=True)
+        if not args.right_only and lh is not None:
+            append_pig_rows(lh, is_right=False)
+
+        with open(args.outputfile, "wt", encoding="utf-8") as out_file:
+            writer = csv.writer(out_file, delimiter="\t")
+            sorted_rows = sorted(
+                pig_rows,
+                key=lambda tup: (float(tup[0]), int(tup[5]), int(tup[2])),
+            )
+            for idx, row in enumerate(sorted_rows):
+                writer.writerow([idx, *row])
+        logger.info("Wrote annotated PIG output to %s", args.outputfile)
+        return
+
+    # MusicXML writer path.
+    if score_info is None:
+        raise ValueError("Only MusicXML inputs can produce MusicXML output in this build.")
+
+    # In one-hand modes, clear stale fingering from the opposite part.
+    if len(score_info.parts) == 1:
+        single_part = score_info.parts[0]
+        if args.right_only:
+            clear_part_fingering(
+                single_part,
+                lyrics=args.below_beam,
+                target_staff=getattr(args, "_resolved_lstaff", None),
+            )
+        if args.left_only:
+            clear_part_fingering(
+                single_part,
+                lyrics=args.below_beam,
+                target_staff=getattr(args, "_resolved_rstaff", None),
+            )
+    else:
+        if args.right_only and len(score_info.parts) > args.lpart:
+            clear_part_fingering(score_info.parts[args.lpart], lyrics=args.below_beam)
+        if args.left_only and len(score_info.parts) > args.rpart:
+            clear_part_fingering(score_info.parts[args.rpart], lyrics=args.below_beam)
+
+    if not args.left_only and rh is not None:
+        if len(score_info.parts) <= args.rpart:
+            logger.debug(
+                "Skipping right-hand annotation: requested part %s but score has %s part(s).",
+                args.rpart,
+                len(score_info.parts),
+            )
+        else:
+            annotate_part_with_fingering(
+                score_info.parts[args.rpart],
+                rh.noteseq,
+                lyrics=rh.lyrics,
+                skip_chords_with=4,
+                target_staff=getattr(args, "_resolved_rstaff", None),
+            )
+
+    if not args.right_only and lh is not None:
+        if len(score_info.parts) <= args.lpart:
+            logger.debug(
+                "Skipping left-hand annotation: requested part %s but score has %s part(s).",
+                args.lpart,
+                len(score_info.parts),
+            )
+        else:
+            annotate_part_with_fingering(
+                score_info.parts[args.lpart],
+                lh.noteseq,
+                lyrics=lh.lyrics,
+                skip_chords_with=4,
+                target_staff=getattr(args, "_resolved_lstaff", None),
+            )
+
+    # Inject layout preservation breaks before writing (if available).
+    if layout_info is not None:
+        if inject_layout_breaks(score_info, layout_info):
+            logger.info(
+                "Layout preservation applied: %d system break(s) injected",
+                len(layout_info.system_breaks),
+            )
+        else:
+            logger.warning(
+                "Layout preservation skipped: measure count tolerance exceeded. "
+                "MuseScore will use auto-reflow."
+            )
+
+    score_info.write(args.outputfile)
+    logger.debug("Wrote annotated score to %s", args.outputfile)
+
+    if args.musescore:
+        logger.info("Opening MuseScore with output score: %s", args.outputfile)
+        if platform.system() == "Darwin":
+            _run_external(["open", args.outputfile], "open output score")
+        else:
+            _run_external(["musescore", args.outputfile], "open MuseScore")
+
+
+def maybe_play_vedo(args, xmlfn, rh, lh):
+    """Run optional experimental 3D playback after annotation."""
+    args = _as_namespace(args)
+
+    if not args.with_vedo:
+        return
+
+    if args.start_measure != 1:
+        raise ValueError("start_measure must be set to 1 when -v/--with-vedo is used")
+
+    ext = os.path.splitext(str(xmlfn).lower())[1]
+    if ext not in {".xml", ".mxl"}:
+        logger.warning("3D playback currently requires MusicXML (.xml/.mxl) input; skipping.")
+        return
+
+    try:
         from pianoplayer.vkeyboard import VirtualKeyboard
+    except ImportError:
+        logger.warning(
+            "vedo is not available, skipping 3D playback. "
+            "Install with: pip install 'pianoplayer[visual]'"
+        )
+        return
 
-        if args.start_measure != 1:
-            print('Sorry, start_measure must be set to 1 when -v option is used. Exit.')
-            exit()
+    vk = VirtualKeyboard(songname=xmlfn)
+    if not args.left_only and rh is not None:
+        vk.build_right_hand(rh)
+    if not args.right_only and lh is not None:
+        vk.build_left_hand(lh)
 
-        vk = VirtualKeyboard(songname=xmlfn)
+    if args.sound_off:
+        vk.playsounds = False
 
-        if not args.left_only:
-            vk.build_RH(rh)
-        if not args.right_only:
-            vk.build_LH(lh)
+    vk.play()
 
-        if args.sound_off:
-            vk.playsounds = False
-
-        vk.speedfactor = args.vedo_speed
-        vk.play()
+    renderer = getattr(vk.vp, "renderer", None)
+    if renderer is None:
+        logger.info("3D viewport already closed; skipping final show().")
+        return
+    try:
         vk.vp.show(zoom=2, interactive=1)
+    except AttributeError:
+        logger.info("3D viewport renderer unavailable; exiting 3D playback cleanly.")
 
 
-if __name__ == '__main__':
-    run_annotate('../scores/test_chord.xml', outputfile="test_chord_annotate.xml", right_only=True, musescore=True, n_measures=800, depth=0)
+def annotate(args: AnnotateOptions | SimpleNamespace | Any, layout_info=None):
+    """End-to-end annotation pipeline used by CLI and GUI entry points.
+
+    Args:
+        layout_info: Optional LayoutInfo for PDF layout preservation. When provided,
+            layout breaks are injected into the annotated score before writing.
+    """
+    t_start = time.perf_counter()
+
+    def is_anchored_finger(value: Any) -> bool:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text.lstrip("+-").isdigit():
+                return False
+            value = int(text)
+        if not isinstance(value, int):
+            return False
+        return 1 <= abs(value) <= 5
+
+    def hand_status(is_right: bool, score_info) -> str:
+        hand_name = "RH" if is_right else "LH"
+        only_flag = args.left_only if is_right else args.right_only
+        if only_flag:
+            return f"{hand_name}=disabled"
+        part = args.rpart if is_right else args.lpart
+        staff = getattr(args, "_resolved_rstaff" if is_right else "_resolved_lstaff", None)
+        if score_info is not None and len(score_info.parts) <= part:
+            return f"{hand_name}=skipped(part {part} out of range)"
+        if staff:
+            return f"{hand_name}=ok(part {part}, staff {staff})"
+        return f"{hand_name}=ok(part {part})"
+
+    def hand_route(is_right: bool) -> str:
+        part = args.rpart if is_right else args.lpart
+        staff = getattr(args, "_resolved_rstaff" if is_right else "_resolved_lstaff", None)
+        if staff:
+            return f"part {part}, staff {staff}"
+        return f"part {part}"
+
+    def styled_status(status: str) -> str:
+        if status.startswith("ok"):
+            return f"[green]{status}[/green]"
+        if status.startswith("skipped"):
+            return f"[yellow]{status}[/yellow]"
+        if status.startswith("disabled"):
+            return f"[dim]{status}[/dim]"
+        return status
+
+    # Normalize caller input and execution flags.
+    show_progress = bool(getattr(args, "_show_progress", False))
+    if isinstance(args, AnnotateOptions):
+        args = args.to_namespace()
+    else:
+        args = AnnotateOptions.from_namespace(args).to_namespace()
+
+    # Clamp manual search depth.
+    depth = int(getattr(args, "depth", 0))
+    if depth > _MAX_MANUAL_DEPTH:
+        logger.warning(
+            "Requested depth %s is above max %s; using %s.",
+            depth, _MAX_MANUAL_DEPTH, _MAX_MANUAL_DEPTH,
+        )
+        args.depth = _MAX_MANUAL_DEPTH
+    elif depth and depth < _MIN_MANUAL_DEPTH:
+        logger.warning(
+            "Requested depth %s is below min %s; using %s.",
+            depth, _MIN_MANUAL_DEPTH, _MIN_MANUAL_DEPTH,
+        )
+        args.depth = _MIN_MANUAL_DEPTH
+
+    # Chord staggering.
+    raw_stagger = getattr(args, "chord_note_stagger_s", 0.05)
+    try:
+        stagger = float(raw_stagger)
+    except (TypeError, ValueError):
+        logger.warning("Invalid chord_note_stagger_s %r; using 0.05.", raw_stagger)
+        args.chord_note_stagger_s = 0.05
+    else:
+        if stagger < 0:
+            logger.warning("Negative chord_note_stagger_s %s is invalid; using 0.0.", stagger)
+            args.chord_note_stagger_s = 0.0
+        else:
+            args.chord_note_stagger_s = stagger
+
+    show_progress = show_progress and not bool(args.quiet)
+
+    # Main pipeline: parse input, generate fingering, then write output.
+    with _ProgressReporter(show_progress) as progress:
+        xmlfn, score_info, rh_noteseq, lh_noteseq = load_note_sequences(args)
+
+        rh_anchors = sum(
+            1 for n in (rh_noteseq or []) if is_anchored_finger(getattr(n, "fingering", 0))
+        )
+        lh_anchors = sum(
+            1 for n in (lh_noteseq or []) if is_anchored_finger(getattr(n, "fingering", 0))
+        )
+        if rh_anchors + lh_anchors:
+            parts = []
+            if not args.left_only:
+                parts.append(f"RH={rh_anchors}")
+            if not args.right_only:
+                parts.append(f"LH={lh_anchors}")
+            logger.info(
+                "Detected pre-annotated fingers (%s). They will be preserved and used as anchors.",
+                ", ".join(parts),
+            )
+        progress.parse_done()
+        rh, lh = generate_hands(args, rh_noteseq, lh_noteseq, progress=progress)
+        progress.write_start()
+        write_annotated_output(args, score_info, rh, lh, layout_info=layout_info)
+        progress.write_done()
+
+    maybe_play_vedo(args, xmlfn, rh, lh)
+
+    # Build compact end-of-run summary.
+    rh_count = len(rh.noteseq) if rh is not None and getattr(rh, "noteseq", None) else 0
+    lh_count = len(lh.noteseq) if lh is not None and getattr(lh, "noteseq", None) else 0
+    parts_info = str(len(score_info.parts)) if score_info is not None else "n/a"
+    depth_info = "auto" if int(getattr(args, "depth", 0)) == 0 else str(args.depth)
+    elapsed_s = time.perf_counter() - t_start
+
+    rh_status = hand_status(is_right=True, score_info=score_info).replace("RH=", "")
+    lh_status = hand_status(is_right=False, score_info=score_info).replace("LH=", "")
+
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+
+        table = Table(title="  Run Summary", title_justify="left", show_header=False)
+        table.add_column("Field", style="bold")
+        table.add_column("Value", overflow="fold")
+        table.add_row("Input", str(args.filename))
+        table.add_row("Output", str(args.outputfile))
+        table.add_row("Depth", depth_info)
+        table.add_row("Parts", parts_info)
+        table.add_row("RH Route", hand_route(is_right=True))
+        table.add_row("LH Route", hand_route(is_right=False))
+        table.add_row("Elapsed", f"{elapsed_s:.2f} s")
+        table.add_row("Right Hand", f"{styled_status(rh_status)} | notes={rh_count}")
+        table.add_row("Left Hand", f"{styled_status(lh_status)} | notes={lh_count}")
+        Console().print(table)
+
+        if not args.musescore:
+            hint = f"visualize annotated score with command: musescore '{args.outputfile}'"
+            panel = Panel(
+                f"[bold]💡 {hint}[/bold]",
+                border_style="bright_cyan",
+                expand=False,
+            )
+            Console().print(panel)
+    except Exception:
+        logger.info(
+            (
+                "Summary | input=%s | output=%s | depth=%s | parts=%s | elapsed=%.2fs "
+                "| RH-route=%s | LH-route=%s | RH=%s(notes=%s) | LH=%s(notes=%s)"
+            ),
+            args.filename,
+            args.outputfile,
+            depth_info,
+            parts_info,
+            elapsed_s,
+            hand_route(is_right=True),
+            hand_route(is_right=False),
+            rh_status,
+            rh_count,
+            lh_status,
+            lh_count,
+        )
+        if not args.musescore:
+            logger.info("visualize annotated score with command: musescore '%s'", args.outputfile)
+
+
+if __name__ == "__main__":
+    run_annotate("../scores/test_chord.xml", outputfile="test_chord_annotate.xml",
+                 right_only=True, musescore=True, n_measures=800, depth=0)
